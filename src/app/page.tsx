@@ -1,4 +1,3 @@
-// THIS MUST BE THE VERY FIRST LINE OF THE FILE
 'use client';
 
 // Location: app/page.tsx (or src/app/page.tsx)
@@ -17,7 +16,7 @@ console.log("KEY:", process.env.OPENAI_API_KEY); // should print your key
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { useState, Suspense } from 'react';
+import { useState, FormEvent, Suspense } from 'react';
 // Import the loader icon
 import { Loader2, Copy, RotateCcw, Save } from 'lucide-react';
 
@@ -51,36 +50,47 @@ import {
 // Import the Toaster component
 import { Toaster } from "@/components/ui/toaster"
 
+// Import history utility functions
+import { saveHistoryEntryToLocalStorage } from '@/lib/historyUtils';
+import type { HistoryEntry } from '@/types/history';
+import { TargetAudience, SummaryFormat, RewriteGoal } from '@/types/history';
+import { HistoryDisplay } from '@/components/history-display';
+import type { ProcessingMode, RewriteTone, SummaryDetailLevel } from '@/app/api/process/route';
+
 // Define character limits
 const MAX_CHARS = 20000;
 const WARNING_CHARS = 15000;
 
-// Define possible modes and tones for type safety
-export type ProcessingMode = 'summarize' | 'rewrite';
-export type RewriteTone = 'formal' | 'casual' | 'creative';
-
-// Define summary detail levels
-const summaryDetailLevels = {
-  1: 'Very Brief',
-  2: 'Short',
-  3: 'Medium',
-  4: 'Long',
-  5: 'Detailed',
+// Constants for UI options
+const targetAudiences = {
+  general: 'General Audience',
+  simple: 'Simple / Layperson',
+  expert: 'Expert / Technical',
 } as const;
 
-type SummaryDetailLevel = keyof typeof summaryDetailLevels;
+const summaryFormats = {
+  paragraph: 'Paragraph',
+  'bullet-points': 'Bullet Points',
+} as const;
+
+const rewriteGoals = {
+  'maintain-length': 'Maintain Length',
+  'make-shorter': 'Make Shorter',
+} as const;
 
 // Types for the streaming result state
-type StreamingState = {
+interface StreamingState {
   text: string;
   isComplete: boolean;
   startTime: number | null;
   chunks: number;
   totalLength: number;
-};
+}
 
 // Post-streaming actions component
 function PostStreamActions({ result, onReset }: { result: string; onReset: () => void }) {
+  const { toast } = useToast();
+  
   const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(result);
@@ -136,15 +146,13 @@ type ErrorResponse = {
   details?: Record<string, unknown>;
 };
 
-// --- Toast Titles ---
-const ToastTitles = {
-  VALIDATION: 'Validation Error',
-  API_ERROR: 'API Error',
-  NETWORK_ERROR: 'Network Error',
-  UNKNOWN_ERROR: 'Error',
+const summaryDetailLevels = {
+  1: 'Very Brief',
+  2: 'Short',
+  3: 'Medium',
+  4: 'Long',
+  5: 'Detailed',
 } as const;
-
-type ToastTitle = typeof ToastTitles[keyof typeof ToastTitles];
 
 /**
  * HomePage Component - Implements progressive text streaming with React state management
@@ -165,8 +173,11 @@ export default function HomePage() {
   
   // Processing mode and tone selection
   const [mode, setMode] = useState<ProcessingMode>('summarize');
-  const [tone, setTone] = useState<RewriteTone>('formal');
+  const [selectedTone, setSelectedTone] = useState<RewriteTone>('formal');
   const [summaryLengthLevel, setSummaryLengthLevel] = useState<SummaryDetailLevel>(3);
+  const [targetAudience, setTargetAudience] = useState<TargetAudience>('general');
+  const [summaryFormat, setSummaryFormat] = useState<SummaryFormat>('paragraph');
+  const [rewriteGoal, setRewriteGoal] = useState<RewriteGoal>('maintain-length');
 
   // Streaming state management
   const [streamingState, setStreamingState] = useState<StreamingState>({
@@ -218,139 +229,118 @@ export default function HomePage() {
     });
   };
 
-  /**
-   * Handles form submission and manages the streaming text process
-   * 
-   * The progressive display works through these steps:
-   * 1. Stream chunks arrive from fetch
-   * 2. Each chunk updates outputText state via functional update
-   * 3. React re-renders on state change
-   * 4. Textarea updates due to value={outputText} binding
-   */
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputText.trim()) return;
+  // --- Handlers ---
+  const handleSummarySliderChange = (value: number[]) => {
+    const level = value[0] as SummaryDetailLevel;
+    setSummaryLengthLevel(level);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!inputText.trim() || isLoading) return;
 
     setIsLoading(true);
-    setStreamingState({
-      text: '',
-      isComplete: false,
-      startTime: Date.now(),
-      chunks: 0,
-      totalLength: 0
-    });
+    let finalOutput = '';
 
     try {
+      console.log('[Client] Sending request to /api/process');
       const response = await fetch('/api/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: inputText,
-          mode: mode,
-          ...(mode === 'summarize' 
-            ? { summaryLengthLevel: summaryLengthLevel }
-            : { tone: tone }
-          ),
+          mode,
+          ...(mode === 'rewrite' && { tone: selectedTone }),
+          ...(mode === 'summarize' && { summaryLengthLevel }),
+          targetAudience,
+          ...(mode === 'summarize' ? { summaryFormat } : { rewriteGoal }),
         }),
       });
 
+      console.log('[Client] Response status:', response.status);
+
       if (!response.ok) {
-        // Attempt to parse the error response
-        const errorData: ErrorResponse = await response.json().catch(() => ({
-          code: 'UNKNOWN_ERROR',
-          error: `API Error: ${response.status} ${response.statusText}`,
-        }));
-
-        console.error('[Client] API Error Response:', {
-          code: errorData.code,
-          message: errorData.error,
-          details: errorData.details,
-        });
-
-        // Determine toast title based on error code
-        let toastTitle: ToastTitle = ToastTitles.API_ERROR;
-        if (errorData.code.startsWith('VALIDATION_')) {
-          toastTitle = ToastTitles.VALIDATION;
-        } else if (errorData.code.startsWith('AI_')) {
-          toastTitle = ToastTitles.API_ERROR;
-        }
-
-        // Show error toast
+        const errorData: ErrorResponse | null = await response.json().catch(() => null);
+        const errorMessage = errorData?.error || `API Error: ${response.status} ${response.statusText}`;
+        console.error('[Client] API Error Response:', errorMessage, 'Code:', errorData?.code);
         toast({
           variant: "destructive",
-          title: toastTitle,
-          description: errorData.error,
-          duration: 5000, // Show for 5 seconds
+          title: "Request Failed",
+          description: errorMessage,
         });
-
-        setIsLoading(false);
         return;
       }
 
       if (!response.body) {
-        throw new Error("Response body is missing.");
+        throw new Error('Response body is missing');
       }
 
+      console.log('[Client] Starting to process stream...');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let streamEndedSuccessfully = false;
+      let reading = true;
 
-      while (true) {
+      while (reading) {
         const { done, value } = await reader.read();
-
         if (done) {
-          setStreamingState(prev => ({
-            ...prev,
-            isComplete: true
-          }));
-          streamEndedSuccessfully = true;
-          break;
+          reading = false;
+          console.log('[Client] Stream finished.');
+          continue;
         }
 
-        if (value) {
-          const decodedChunk = decoder.decode(value, { stream: true });
-          
-          setStreamingState(prev => ({
-            ...prev,
-            text: prev.text + decodedChunk,
-            chunks: prev.chunks + 1,
-            totalLength: prev.totalLength + decodedChunk.length
-          }));
-        }
+        const chunk = decoder.decode(value, { stream: true });
+        finalOutput += chunk;
+        setStreamingState((prev: StreamingState) => ({ ...prev, text: prev.text + chunk }));
       }
 
-      if (streamEndedSuccessfully) {
-        toast({
-          title: "Processing Complete",
-          description: "Your text has been successfully processed.",
-        });
+      // --- SUCCESS POINT: Stream Completed ---
+      console.log('[Client] Operation successful. Saving to history...');
+
+      // Create the history entry
+      const historyEntry: HistoryEntry = {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        inputText,
+        outputText: finalOutput,
+        mode,
+        options: {
+          summaryLengthLevel,
+          tone: selectedTone,
+          targetAudience,
+          summaryFormat,
+          rewriteGoal,
+        },
+      };
+      saveHistoryEntryToLocalStorage(historyEntry);
+
+    } catch (clientError: unknown) {
+      console.error("[Client] Fetch or Stream Processing Error:", clientError);
+      let message = 'An unexpected error occurred while fetching the result.';
+      if (clientError instanceof Error) {
+        message = clientError.message;
       }
-
-    } catch (error: unknown) {
-      console.error('[Client] Request Error:', error);
-      
-      let errorMessage = 'An unexpected error occurred while processing your request.';
-      let errorTitle: ToastTitle = ToastTitles.UNKNOWN_ERROR;
-
-      if (error instanceof Error) {
-        // Handle network errors
-        if (error.name === 'TypeError' && error.message.includes('fetch')) {
-          errorTitle = ToastTitles.NETWORK_ERROR;
-          errorMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
-        } else {
-          errorMessage = error.message;
-        }
-      }
-
-      // Show error toast
       toast({
         variant: "destructive",
-        title: errorTitle,
-        description: errorMessage,
-        duration: 5000,
+        title: "Operation Failed",
+        description: message,
       });
-
+    } finally {
       setIsLoading(false);
+      console.log('[Client] handleSubmit finished.');
+    }
+  };
+
+  const handleLoadHistoryEntry = (entry: HistoryEntry) => {
+    setInputText(entry.inputText);
+    setMode(entry.mode);
+    setStreamingState(prev => ({ ...prev, text: entry.outputText }));
+    setSummaryLengthLevel(entry.options.summaryLengthLevel);
+    setSelectedTone(entry.options.tone);
+    setTargetAudience(entry.options.targetAudience);
+    if (entry.mode === 'summarize') {
+      setSummaryFormat(entry.options.summaryFormat ?? 'paragraph');
+    } else {
+      setRewriteGoal(entry.options.rewriteGoal ?? 'maintain-length');
     }
   };
 
@@ -373,8 +363,8 @@ export default function HomePage() {
             <CardTitle className="text-xl sm:text-2xl">Input & Options</CardTitle>
             <CardDescription className="text-sm sm:text-base">
               Paste your text below and choose how you want to process it.
-            </CardDescription>
-          </CardHeader>
+          </CardDescription>
+        </CardHeader>
           <Separator className="mb-4 sm:mb-6" />
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4 sm:space-y-6">
@@ -445,8 +435,8 @@ export default function HomePage() {
                       Tone (if rewriting)
                     </Label>
                     <Select
-                      value={tone}
-                      onValueChange={(value) => setTone(value as RewriteTone)}
+                      value={selectedTone}
+                      onValueChange={(value) => setSelectedTone(value as RewriteTone)}
                       disabled={mode !== 'rewrite' || isLoading}
                     >
                       <SelectTrigger id="tone-select" className="w-full text-sm sm:text-base transition-all duration-200 hover:border-primary">
@@ -476,11 +466,70 @@ export default function HomePage() {
                       max={5}
                       step={1}
                       value={[summaryLengthLevel]}
-                      onValueChange={(value: number[]) => setSummaryLengthLevel(value[0] as SummaryDetailLevel)}
+                      onValueChange={handleSummarySliderChange}
                       disabled={mode !== 'summarize' || isLoading}
                       className="pt-2 transition-opacity duration-200"
                     />
                   </div>
+
+                  {/* Target Audience */}
+                  <div className="space-y-2">
+                    <Label htmlFor="audience-select">Target Audience</Label>
+                    <Select
+                      value={targetAudience}
+                      onValueChange={(value: TargetAudience) => setTargetAudience(value)}
+                    >
+                      <SelectTrigger id="audience-select">
+                        <SelectValue placeholder="Select Audience" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(targetAudiences).map(([key, label]) => (
+                          <SelectItem key={key} value={key}>{label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Mode-specific Options */}
+                  {mode === 'summarize' ? (
+                    <>
+                      {/* Summarization Format */}
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Output Format</Label>
+                        <RadioGroup
+                          value={summaryFormat}
+                          onValueChange={(value: SummaryFormat) => setSummaryFormat(value)}
+                          className="flex flex-col md:flex-row md:space-x-4 space-y-2 md:space-y-0"
+                        >
+                          {Object.entries(summaryFormats).map(([key, label]) => (
+                            <div key={key} className="flex items-center space-x-2">
+                              <RadioGroupItem value={key} id={`format-${key}`} />
+                              <Label htmlFor={`format-${key}`} className="font-normal cursor-pointer">{label}</Label>
+                            </div>
+                          ))}
+                        </RadioGroup>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Rewrite Goal */}
+                      <div className="space-y-2">
+                        <Label>Rewrite Goal</Label>
+                        <RadioGroup
+                          value={rewriteGoal}
+                          onValueChange={(value: RewriteGoal) => setRewriteGoal(value)}
+                          className="flex items-center space-x-4"
+                        >
+                          {Object.entries(rewriteGoals).map(([key, label]) => (
+                            <div key={key} className="flex items-center space-x-2">
+                              <RadioGroupItem value={key} id={`goal-${key}`} />
+                              <Label htmlFor={`goal-${key}`} className="font-normal cursor-pointer">{label}</Label>
+                            </div>
+                          ))}
+                        </RadioGroup>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -527,9 +576,9 @@ export default function HomePage() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            </CardContent>
+        </CardContent>
           </form>
-        </Card>
+      </Card>
 
         {/* Output Card */}
         <Card className={`shadow-lg dark:shadow-slate-800 transition-all duration-300 hover:shadow-xl dark:hover:shadow-slate-700 ${streamingState.text ? 'animate-fade-in' : ''}`}>
@@ -537,10 +586,10 @@ export default function HomePage() {
             <CardTitle className="text-xl sm:text-2xl">Output</CardTitle>
             <CardDescription className="text-sm sm:text-base">
               The AI-generated text will appear below as it&apos;s generated.
-            </CardDescription>
-          </CardHeader>
+          </CardDescription>
+        </CardHeader>
           <Separator className="mb-4 sm:mb-6" />
-          <CardContent>
+        <CardContent>
             <div className="grid w-full gap-2">
               <Label htmlFor="output-text" className="text-sm sm:text-base font-semibold">Result</Label>
               <Textarea
@@ -568,10 +617,13 @@ export default function HomePage() {
                 )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+        </CardContent>
+      </Card>
       </div>
       <Toaster />
+
+      {/* History Display */}
+      <HistoryDisplay onLoadEntry={handleLoadHistoryEntry} />
     </main>
   );
 }
