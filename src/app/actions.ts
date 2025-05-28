@@ -33,6 +33,14 @@ type ProcessTextResponse = {
   model?: string;
   success: boolean;
   errorType?: string;
+  isStreaming?: boolean;
+};
+
+// Define the streaming response type
+type StreamingResponse = {
+  content: string;
+  done: boolean;
+  error?: string;
 };
 
 // --- OpenAI Client Initialization ---
@@ -161,43 +169,38 @@ function handleOpenAIError(error: unknown): ProcessTextResponse {
 }
 
 /**
- * Server Action to process the input text using an LLM.
+ * Server Action to process the input text using an LLM with streaming support.
  * This function runs exclusively on the server.
  *
  * @param text The user's input text.
  * @param options Configuration options selected by the user.
- * @returns The processed text or an error message.
+ * @returns An async generator that yields streaming responses.
  */
-export async function processTextAction(
+export async function* processTextAction(
   text: string,
   options: ProcessTextOptions
-): Promise<ProcessTextResponse> {
+): AsyncGenerator<StreamingResponse, void, unknown> {
   console.log('[Server Action Called] processTextAction');
-
-  // Log received options for verification
-  console.log('[Server Action Options] Received mode:', options.mode);
-  console.log('[Server Action Options] Received tone:', options.tone ?? '(not applicable)');
+  console.log('[Server Action] Starting streaming request with options:', {
+    mode: options.mode,
+    tone: options.tone,
+    textLength: text.length
+  });
 
   // Check if OpenAI client is available before proceeding
   if (!openai) {
     const errorMessage = 'Server configuration error: AI service is unavailable. Please check server logs.';
     console.error('[Server Action] Cannot proceed:', errorMessage);
-    return { 
-      error: errorMessage,
-      errorType: 'CONFIGURATION_ERROR',
-      success: false 
-    };
+    yield { content: '', done: true, error: errorMessage };
+    return;
   }
 
   // Check if input text is provided
   if (!text || text.trim() === '') {
     const errorMessage = 'Input text cannot be empty.';
     console.log('[Server Action]', errorMessage);
-    return { 
-      error: errorMessage,
-      errorType: 'VALIDATION_ERROR',
-      success: false 
-    };
+    yield { content: '', done: true, error: errorMessage };
+    return;
   }
 
   console.log(
@@ -206,7 +209,7 @@ export async function processTextAction(
   );
 
   try {
-    console.log('[Server Action] Calling OpenAI Chat Completions API...');
+    console.log('[Server Action] Calling OpenAI Chat Completions API with streaming...');
 
     // Define the model to use
     const model = 'gpt-3.5-turbo';
@@ -223,59 +226,62 @@ export async function processTextAction(
       }
     ];
 
-    // Execute the API call using the configured client
-    console.log('[Server Action] Sending request to OpenAI API...');
-    const completion = await openai.chat.completions.create({
-      model: model,
-      messages: messages,
-      temperature: options.tone === 'creative' ? 0.8 : 0.7, // Higher temperature for creative tone
-      max_tokens: 500, // Increased token limit for better responses
-      presence_penalty: 0.6, // Encourage diverse vocabulary
-      frequency_penalty: 0.3, // Discourage repetition
+    console.log('[Server Action] Sending streaming request to OpenAI API with config:', {
+      model,
+      temperature: options.tone === 'creative' ? 0.8 : 0.7,
+      max_tokens: 500,
+      presence_penalty: 0.6,
+      frequency_penalty: 0.3
     });
 
-    console.log('[Server Action] Received response from OpenAI API');
+    // Execute the API call using the configured client with streaming enabled
+    const stream = await openai.chat.completions.create({
+      model: model,
+      messages: messages,
+      temperature: options.tone === 'creative' ? 0.8 : 0.7,
+      max_tokens: 500,
+      presence_penalty: 0.6,
+      frequency_penalty: 0.3,
+      stream: true,
+    });
 
-    // Extract the response content and metadata
-    if (completion.choices && completion.choices.length > 0) {
-      const choice = completion.choices[0];
-      const result = choice.message?.content?.trim(); // Added trim() to remove extra whitespace
+    console.log('[Server Action] Stream established, beginning to process chunks...');
+
+    // Process the stream
+    let accumulatedContent = '';
+    let chunkCount = 0;
+    const startTime = Date.now();
+
+    for await (const chunk of stream) {
+      chunkCount++;
+      const content = chunk.choices[0]?.delta?.content || '';
       
-      if (result) {
-        console.log('[Server Action] Successfully processed response');
-        console.log('[Server Action] Finish reason:', choice.finish_reason);
-        console.log('[Server Action] Token usage:', completion.usage);
-        
-        return {
-          result,
-          usage: completion.usage,
-          finish_reason: choice.finish_reason,
-          model: completion.model,
-          success: true
-        };
-      } else {
-        const errorMessage = 'No content generated in the response.';
-        console.log('[Server Action]', errorMessage);
-        console.log('[Server Action] Response structure:', JSON.stringify(completion, null, 2));
-        return { 
-          error: errorMessage,
-          errorType: 'EMPTY_RESPONSE',
-          success: false 
-        };
+      if (content) {
+        accumulatedContent += content;
+        yield { content, done: false };
+      }
+
+      // Log progress every 10 chunks
+      if (chunkCount % 10 === 0) {
+        console.log(`[Server Action] Processed ${chunkCount} chunks, current length: ${accumulatedContent.length}`);
       }
     }
 
-    const errorMessage = 'Failed to generate a response. Please try again.';
-    console.log('[Server Action]', errorMessage);
-    console.log('[Server Action] Full response:', JSON.stringify(completion, null, 2));
-    return { 
-      error: errorMessage,
-      errorType: 'NO_CHOICES',
-      success: false 
-    };
+    const duration = Date.now() - startTime;
+    console.log('[Server Action] Stream processing complete:', {
+      totalChunks: chunkCount,
+      finalLength: accumulatedContent.length,
+      duration: `${duration}ms`,
+      averageChunkSize: (accumulatedContent.length / chunkCount).toFixed(2)
+    });
+
+    // Send final response
+    yield { content: accumulatedContent, done: true };
 
   } catch (error: unknown) {
-    return handleOpenAIError(error);
+    const errorResponse = handleOpenAIError(error);
+    console.error('[Server Action] Stream processing error:', errorResponse);
+    yield { content: '', done: true, error: errorResponse.error };
   }
 }
 
