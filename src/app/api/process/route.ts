@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { OpenAIStream, StreamingTextResponse } from 'ai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { TargetAudience, SummaryFormat, RewriteGoal } from '@/types/history';
 
 // --- Constants for Validation ---
 const MAX_INPUT_TEXT_LENGTH = 20000; // Match client-side limit
 const MIN_INPUT_TEXT_LENGTH = 10;    // Require at least 10 characters
+const DEFAULT_MODEL = 'gpt-3.5-turbo';
+const VALID_MODELS = ['gpt-3.5-turbo', 'gpt-4'] as const;
 
 // --- Type Definitions ---
 export type ProcessingMode = 'summarize' | 'rewrite';
@@ -53,26 +56,52 @@ const examples = {
 
 // Add parameter constants after the examples definition
 const LLM_PARAMS = {
-  temperature: {
-    summarize: {
-      veryBrief: 0.3,  // Lower temperature for concise, factual summaries
-      default: 0.5,    // Moderate temperature for balanced summaries
-      detailed: 0.7    // Slightly higher for more detailed summaries
+  'gpt-3.5-turbo': {
+    temperature: {
+      summarize: {
+        veryBrief: 0.3,
+        default: 0.5,
+        detailed: 0.7
+      },
+      rewrite: {
+        formal: 0.5,
+        casual: 0.7,
+        creative: 0.9
+      }
     },
-    rewrite: {
-      formal: 0.5,     // Moderate temperature for consistent formal tone
-      casual: 0.7,     // Higher temperature for more natural casual tone
-      creative: 0.9    // Highest temperature for creative variations
+    maxTokens: {
+      summarize: {
+        veryBrief: 256,
+        default: 512,
+        detailed: 1024
+      },
+      rewrite: {
+        default: 1024
+      }
     }
   },
-  maxTokens: {
-    summarize: {
-      veryBrief: 256,  // Shorter limit for very brief summaries
-      default: 512,    // Standard limit for most summaries
-      detailed: 1024   // Higher limit for detailed summaries
+  'gpt-4': {
+    temperature: {
+      summarize: {
+        veryBrief: 0.2,
+        default: 0.4,
+        detailed: 0.6
+      },
+      rewrite: {
+        formal: 0.4,
+        casual: 0.6,
+        creative: 0.8
+      }
     },
-    rewrite: {
-      default: 1024    // Standard limit for rewrites
+    maxTokens: {
+      summarize: {
+        veryBrief: 512,
+        default: 1024,
+        detailed: 2048
+      },
+      rewrite: {
+        default: 2048
+      }
     }
   }
 } as const;
@@ -104,14 +133,18 @@ type ErrorCode =
   | 'AI_SERVER_ERROR'
   | 'AI_SERVICE_UNAVAILABLE'
   | 'AI_API_ERROR'
-  | 'AI_CONTENT_FILTER';
+  | 'AI_CONTENT_FILTER'
+  | 'INVALID_MODEL';
 
 type RequestBody = {
   text: string;
   mode: ProcessingMode;
   tone?: RewriteTone;
   summaryLengthLevel?: SummaryDetailLevel;
-  promptStructure?: 'system-heavy' | 'user-heavy';
+  targetAudience: TargetAudience;
+  summaryFormat?: SummaryFormat;
+  rewriteGoal?: RewriteGoal;
+  model: 'gpt-3.5-turbo' | 'gpt-4';
 };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -148,7 +181,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { text, mode, tone, summaryLengthLevel, promptStructure = 'system-heavy' } = body;
+    const { text, mode, tone, summaryLengthLevel, promptStructure = 'system-heavy', model } = body;
 
     console.log(`[API Route] Received - Mode: ${mode}, Tone: ${tone ?? 'N/A'}, Summary Level: ${summaryLengthLevel ?? 'N/A'}`);
     console.log('[API Route] Input Text (start):', text?.substring(0, 50) + '...');
@@ -236,6 +269,28 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+
+    // Check 2e: Model Validation
+    if (!model || !VALID_MODELS.includes(model as typeof VALID_MODELS[number])) {
+      console.log(`[API Route] Validation Error: Invalid or missing model. Received: ${model}`);
+      return NextResponse.json<ErrorResponse>(
+        {
+          code: 'INVALID_MODEL',
+          error: `Invalid or missing model specified. Must be one of: ${VALID_MODELS.join(', ')}.`,
+          details: { 
+            receivedModel: model,
+            validModels: VALID_MODELS,
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    // Ensure we have a valid model for the API call
+    const selectedModel = VALID_MODELS.includes(model as typeof VALID_MODELS[number]) 
+      ? model 
+      : DEFAULT_MODEL;
+
     console.log('[API Route] Validation Passed.');
 
     // 3. --- Prompt Construction ---
@@ -344,23 +399,23 @@ Key Requirements:
     // 4. --- LLM API Call (Streaming) ---
     console.log('[API Route] Calling OpenAI API with stream: true...');
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: selectedModel,
       stream: true,
       messages: messages,
       temperature: mode === 'summarize' 
         ? (requestedLengthLevel <= 2 
-          ? LLM_PARAMS.temperature.summarize.veryBrief 
+          ? LLM_PARAMS[selectedModel].temperature.summarize.veryBrief 
           : requestedLengthLevel >= 4 
-            ? LLM_PARAMS.temperature.summarize.detailed 
-            : LLM_PARAMS.temperature.summarize.default)
-        : LLM_PARAMS.temperature.rewrite[requestedTone],
+            ? LLM_PARAMS[selectedModel].temperature.summarize.detailed 
+            : LLM_PARAMS[selectedModel].temperature.summarize.default)
+        : LLM_PARAMS[selectedModel].temperature.rewrite[requestedTone],
       max_tokens: mode === 'summarize'
         ? (requestedLengthLevel <= 2
-          ? LLM_PARAMS.maxTokens.summarize.veryBrief
+          ? LLM_PARAMS[selectedModel].maxTokens.summarize.veryBrief
           : requestedLengthLevel >= 4
-            ? LLM_PARAMS.maxTokens.summarize.detailed
-            : LLM_PARAMS.maxTokens.summarize.default)
-        : LLM_PARAMS.maxTokens.rewrite.default
+            ? LLM_PARAMS[selectedModel].maxTokens.summarize.detailed
+            : LLM_PARAMS[selectedModel].maxTokens.summarize.default)
+        : LLM_PARAMS[selectedModel].maxTokens.rewrite.default
     });
     console.log('[API Route] OpenAI stream initiated.');
 

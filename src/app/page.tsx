@@ -139,6 +139,21 @@ function PostStreamActions({ result, onReset }: { result: string; onReset: () =>
   );
 }
 
+// Add this after the PostStreamActions component
+function RetryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button 
+      variant="outline" 
+      size="sm" 
+      onClick={onClick}
+      className="mt-2 transition-all duration-200 hover:scale-105 active:scale-95"
+    >
+      <RotateCcw className="h-4 w-4 mr-2" />
+      Retry Now
+    </Button>
+  );
+}
+
 // --- Error Response Types ---
 type ErrorResponse = {
   code: string;
@@ -187,6 +202,9 @@ export default function HomePage() {
     chunks: 0,
     totalLength: 0
   });
+
+  // Add to state declarations
+  const [selectedModel, setSelectedModel] = useState<'gpt-3.5-turbo' | 'gpt-4'>('gpt-3.5-turbo');
 
   // Calculate character count and status
   const charCount = inputText.length;
@@ -250,6 +268,7 @@ export default function HomePage() {
         body: JSON.stringify({
           text: inputText,
           mode,
+          model: selectedModel,
           ...(mode === 'rewrite' && { tone: selectedTone }),
           ...(mode === 'summarize' && { summaryLengthLevel }),
           targetAudience,
@@ -263,11 +282,26 @@ export default function HomePage() {
         const errorData: ErrorResponse | null = await response.json().catch(() => null);
         const errorMessage = errorData?.error || `API Error: ${response.status} ${response.statusText}`;
         console.error('[Client] API Error Response:', errorMessage, 'Code:', errorData?.code);
-        toast({
-          variant: "destructive",
-          title: "Request Failed",
-          description: errorMessage,
-        });
+        
+        if (errorData?.code === 'AI_RATE_LIMIT_ERROR') {
+          toast({
+            variant: "destructive",
+            title: "Rate Limit Exceeded",
+            description: (
+              <div className="flex flex-col gap-2">
+                <p>The AI service is experiencing high traffic. Please try again in a few moments.</p>
+                <RetryButton onClick={() => handleSubmit(event)} />
+              </div>
+            ),
+            duration: 10000,
+          });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Request Failed",
+            description: errorMessage,
+          });
+        }
         return;
       }
 
@@ -309,6 +343,7 @@ export default function HomePage() {
           targetAudience,
           summaryFormat,
           rewriteGoal,
+          model: selectedModel,
         },
       };
       saveHistoryEntryToLocalStorage(historyEntry);
@@ -530,6 +565,28 @@ export default function HomePage() {
                       </div>
                     </>
                   )}
+
+                  {/* Model Selection */}
+                  <div className="space-y-2">
+                    <Label htmlFor="model-select">AI Model</Label>
+                    <Select
+                      value={selectedModel}
+                      onValueChange={(value: 'gpt-3.5-turbo' | 'gpt-4') => setSelectedModel(value)}
+                    >
+                      <SelectTrigger id="model-select">
+                        <SelectValue placeholder="Select Model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo (Faster)</SelectItem>
+                        <SelectItem value="gpt-4">GPT-4 (Better Quality)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedModel === 'gpt-4' 
+                        ? 'GPT-4 provides higher quality results but may be slower and more expensive.'
+                        : 'GPT-3.5 Turbo is faster and more cost-effective.'}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -576,9 +633,9 @@ export default function HomePage() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-        </CardContent>
+            </CardContent>
           </form>
-      </Card>
+        </Card>
 
         {/* Output Card */}
         <Card className={`shadow-lg dark:shadow-slate-800 transition-all duration-300 hover:shadow-xl dark:hover:shadow-slate-700 ${streamingState.text ? 'animate-fade-in' : ''}`}>
@@ -586,10 +643,10 @@ export default function HomePage() {
             <CardTitle className="text-xl sm:text-2xl">Output</CardTitle>
             <CardDescription className="text-sm sm:text-base">
               The AI-generated text will appear below as it&apos;s generated.
-          </CardDescription>
-        </CardHeader>
+            </CardDescription>
+          </CardHeader>
           <Separator className="mb-4 sm:mb-6" />
-        <CardContent>
+          <CardContent>
             <div className="grid w-full gap-2">
               <Label htmlFor="output-text" className="text-sm sm:text-base font-semibold">Result</Label>
               <Textarea
@@ -617,8 +674,8 @@ export default function HomePage() {
                 )}
               </div>
             </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
       </div>
       <Toaster />
 

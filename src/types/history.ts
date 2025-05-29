@@ -13,8 +13,9 @@ export interface HistoryOptions {
   summaryLengthLevel: SummaryDetailLevel;
   tone: RewriteTone;
   targetAudience: TargetAudience;
-  summaryFormat?: SummaryFormat;
-  rewriteGoal?: RewriteGoal;
+  summaryFormat: SummaryFormat;
+  rewriteGoal: RewriteGoal;
+  model: 'gpt-3.5-turbo' | 'gpt-4';
 }
 
 export interface HistoryEntry {
@@ -79,5 +80,6 @@ export const DEFAULT_HISTORY_OPTIONS: HistoryOptions = {
   tone: 'formal',
   targetAudience: 'general',
   summaryFormat: 'paragraph',
-  rewriteGoal: 'maintain-length'
+  rewriteGoal: 'maintain-length',
+  model: 'gpt-3.5-turbo'
 }; 
