@@ -1,14 +1,12 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
-import { Loader2, RefreshCw, Trash2, Upload } from 'lucide-react';
-import { getHistoryFromLocalStorage, clearHistoryFromLocalStorage } from '@/lib/historyUtils';
-import type { HistoryEntry } from '@/types/history';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { Clock, Trash2, Loader2, RefreshCw } from 'lucide-react';
+import type { HistoryEntry } from "@/types/history";
+import { useState, useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import {
   AlertDialog,
@@ -39,16 +37,20 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
     try {
       setIsLoading(true);
       setError(null);
-      const loadedHistory = getHistoryFromLocalStorage();
+      const savedHistory = localStorage.getItem('rewritex-history');
       
-      // Sort entries based on current sort option
-      const sortedHistory = [...loadedHistory].sort((a, b) => {
-        return sortBy === 'newest' 
-          ? b.timestamp - a.timestamp 
-          : a.timestamp - b.timestamp;
-      });
-      
-      setHistoryEntries(sortedHistory);
+      if (savedHistory) {
+        const loadedHistory = JSON.parse(savedHistory);
+        
+        // Sort entries based on current sort option
+        const sortedHistory = [...loadedHistory].sort((a, b) => {
+          return sortBy === 'newest' 
+            ? b.timestamp - a.timestamp 
+            : a.timestamp - b.timestamp;
+        });
+        
+        setHistoryEntries(sortedHistory);
+      }
     } catch (err) {
       console.error('[HistoryDisplay] Error loading history:', err);
       setError('Failed to load history. Please try again.');
@@ -66,25 +68,28 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
     loadHistory();
   }, [sortBy]); // Reload when sort option changes
 
-  const formatTimestamp = (timestamp: number): string => {
-    return new Date(timestamp).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  };
-
-  const truncateText = (text: string, maxLength: number = 100): string => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength) + '...';
-  };
-
-  const toggleSort = () => {
-    setSortBy(current => current === 'newest' ? 'oldest' : 'newest');
+  const handleDelete = async (id: string) => {
+    try {
+      const updatedHistory = historyEntries.filter(entry => entry.id !== id);
+      setHistoryEntries(updatedHistory);
+      localStorage.setItem('rewritex-history', JSON.stringify(updatedHistory));
+      toast({
+        title: "Entry Deleted",
+        description: "The history entry has been removed.",
+      });
+    } catch (err) {
+      console.error('[HistoryDisplay] Error deleting entry:', err);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to delete entry. Please try again.",
+      });
+    }
   };
 
   const handleClearHistory = async () => {
     try {
-      clearHistoryFromLocalStorage();
+      localStorage.removeItem('rewritex-history');
       setHistoryEntries([]);
       toast({
         title: "History Cleared",
@@ -110,58 +115,62 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const toggleSort = () => {
+    setSortBy(current => current === 'newest' ? 'oldest' : 'newest');
+  };
+
+  const formatDate = (timestamp: number) => {
+    return new Date(timestamp).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  };
+
   return (
-    <Card className="mt-8">
-      <CardHeader>
-        <div className="flex justify-between items-center">
+    <Card className="w-full max-w-4xl mt-8 bg-zinc-900/50 border-zinc-800 shadow-lg transition-all duration-300 hover:shadow-zinc-800/50">
+      <CardHeader className="space-y-2">
+        <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Processing History</CardTitle>
-            <CardDescription>Your recent summarization and rewrite tasks.</CardDescription>
+            <CardTitle className="text-xl sm:text-2xl text-zinc-100">History</CardTitle>
+            <CardDescription className="text-sm sm:text-base text-zinc-400">
+              Your recent text processing history
+            </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="outline"
+              size="sm"
               onClick={toggleSort}
-              className="text-xs"
+              className="text-zinc-100 hover:text-zinc-300 hover:bg-zinc-800 border-zinc-800 bg-zinc-800/50"
             >
+              <RefreshCw className="h-4 w-4 mr-2" />
               {sortBy === 'newest' ? 'Newest First' : 'Oldest First'}
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={loadHistory} 
-              disabled={isLoading}
-              className="text-xs"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button
-                  variant="destructive"
+                  variant="outline"
                   size="sm"
-                  disabled={isLoading || historyEntries.length === 0}
-                  className="text-xs"
+                  className="text-red-400 hover:text-red-300 hover:bg-zinc-800 border-zinc-800"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear All
                 </Button>
               </AlertDialogTrigger>
-              <AlertDialogContent>
+              <AlertDialogContent className="bg-zinc-900 border-zinc-800">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Clear History</AlertDialogTitle>
-                  <AlertDialogDescription>
+                  <AlertDialogTitle className="text-zinc-100">Clear History</AlertDialogTitle>
+                  <AlertDialogDescription className="text-zinc-400">
                     Are you sure you want to clear all history entries? This action cannot be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleClearHistory}>
-                    Clear All
+                  <AlertDialogCancel className="bg-zinc-800 text-zinc-100 hover:bg-zinc-700">Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleClearHistory}
+                    className="bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Clear History
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -169,62 +178,61 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <ScrollArea className="h-[300px] w-full pr-4">
+      <Separator className="bg-zinc-800" />
+      <CardContent className="p-4">
+        <ScrollArea className="h-[300px] w-full rounded-md">
           {isLoading ? (
             <div className="flex items-center justify-center h-full">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
             </div>
           ) : error ? (
-            <div className="text-center text-destructive">
-              <p>{error}</p>
-              <Button 
-                variant="outline" 
-                size="sm" 
+            <div className="flex flex-col items-center justify-center h-full space-y-4">
+              <p className="text-red-400">{error}</p>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={loadHistory}
-                className="mt-2"
+                className="text-zinc-100 hover:bg-zinc-800 border-zinc-800"
               >
-                Try Again
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
               </Button>
             </div>
           ) : historyEntries.length === 0 ? (
-            <p className="text-muted-foreground text-center">No history entries yet.</p>
+            <p className="text-center text-zinc-400 py-4">No history yet</p>
           ) : (
             <div className="space-y-4">
-              {historyEntries.map((entry, index) => (
-                <div key={entry.id} className="animate-fade-in">
-                  <div className="flex justify-between items-start text-sm mb-2">
-                    <span className="text-muted-foreground font-medium">
-                      {formatTimestamp(entry.timestamp)}
-                    </span>
-                    <Badge variant={entry.mode === 'summarize' ? 'secondary' : 'outline'}>
-                      {entry.mode === 'summarize' ? 'Summarize' : 'Rewrite'}
-                      {entry.mode === 'summarize' && entry.options.summaryLengthLevel && ` (Lvl ${entry.options.summaryLengthLevel})`}
-                      {entry.mode === 'rewrite' && entry.options.tone && ` (${entry.options.tone})`}
-                    </Badge>
-                  </div>
-                  <div className="space-y-2 text-xs">
-                    <p>
-                      <strong className="font-semibold">Input:</strong>
-                      <span className="text-muted-foreground ml-1">{truncateText(entry.inputText)}</span>
-                    </p>
-                    <p>
-                      <strong className="font-semibold">Output:</strong>
-                      <span className="text-muted-foreground ml-1">{truncateText(entry.outputText)}</span>
-                    </p>
-                  </div>
-                  <div className="flex justify-end space-x-2 mt-2">
+              {historyEntries.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-col space-y-2 p-4 rounded-lg border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900 transition-colors duration-200"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Clock className="h-4 w-4 text-zinc-400" />
+                      <span className="text-sm text-zinc-400">{formatDate(entry.timestamp)}</span>
+                    </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleLoadEntry(entry)}
-                      className="text-xs"
+                      onClick={() => handleDelete(entry.id)}
+                      className="text-zinc-400 hover:text-red-400 hover:bg-zinc-800"
                     >
-                      <Upload className="h-4 w-4 mr-2" />
-                      Load
+                      <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
-                  {index < historyEntries.length - 1 && <Separator className="my-4" />}
+                  <div className="flex flex-col space-y-1">
+                    <p className="text-sm font-medium text-zinc-100">Mode: {entry.mode}</p>
+                    <p className="text-sm text-zinc-400 line-clamp-2">{entry.inputText}</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleLoadEntry(entry)}
+                    className="w-full mt-2 border-zinc-800 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100"
+                  >
+                    Load
+                  </Button>
                 </div>
               ))}
             </div>
