@@ -145,6 +145,7 @@ type RequestBody = {
   summaryFormat?: SummaryFormat;
   rewriteGoal?: RewriteGoal;
   model: 'gpt-3.5-turbo' | 'gpt-4';
+  promptStructure?: 'system-heavy' | 'user-heavy';
 };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -420,7 +421,8 @@ Key Requirements:
     console.log('[API Route] OpenAI stream initiated.');
 
     // 5. --- Stream Processing and Response ---
-    const stream = OpenAIStream(response, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream = OpenAIStream(response as any, {
       onCompletion: () => {
         console.log('[API Route] Stream completed successfully');
       }

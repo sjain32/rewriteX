@@ -6,7 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Clock, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import type { HistoryEntry } from "@/types/history";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import {
   AlertDialog,
@@ -33,7 +33,7 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>('newest');
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -62,11 +62,13 @@ export function HistoryDisplay({ onLoadEntry }: HistoryDisplayProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [sortBy, toast]);
 
   useEffect(() => {
     loadHistory();
-  }, [sortBy]); // Reload when sort option changes
+    window.addEventListener('storage', loadHistory);
+    return () => window.removeEventListener('storage', loadHistory);
+  }, [loadHistory]);
 
   const handleDelete = async (id: string) => {
     try {

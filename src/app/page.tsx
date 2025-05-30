@@ -10,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"; // Ensure this path matches your project structure
-console.log("KEY:", process.env.OPENAI_API_KEY); // should print your key
 import JarvisScene from "@/components/Robot";
 // Import the Textarea, Label, and Button components
 import { Textarea } from "@/components/ui/textarea";
@@ -274,6 +273,7 @@ export default function HomePage() {
           ...(mode === 'summarize' && { summaryLengthLevel }),
           targetAudience,
           ...(mode === 'summarize' ? { summaryFormat } : { rewriteGoal }),
+          promptStructure: 'system-heavy'
         }),
       });
 
